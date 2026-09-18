@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
 
-from audio import AudioStore
+from audio import AudioStore, parse_cuts_param
 from offsets import OffsetStore
 from security import SessionManager, request_token, resolves_publicly
 from sync import SyncEngine
@@ -123,23 +123,59 @@ def _audio_response(path: Path, media_type: str, cache_control: str = "no-cache"
     })
 
 
-@app.get("/dual/aud/{hid}/audio.m3u8")
-async def audio_playlist(hid: str, request: Request, o: int = 0, r: int = 1_000_000_000):
+@app.api_route("/dual/aud/{hid}/audio.m3u8", methods=["GET", "HEAD"])
+async def audio_playlist(hid: str, request: Request, o: int = 0, r: int = 1_000_000_000,
+                         c: str = "", b: str = ""):
     token = _require_session(request)
     try:
         metadata = audio.metadata(hid)
         offset, rate = o / 1000.0, r / 1_000_000_000
-        timeline = audio.timeline(metadata, offset, rate)
+        cuts = parse_cuts_param(c) if c else None
+        bridge_hid = b.strip() if b else ""
+        bridge_metadata = None
+        if bridge_hid:
+            try:
+                bridge_metadata = audio.metadata(bridge_hid)
+            except Exception:
+                bridge_metadata = None
+
+        timeline = audio.timeline(
+            metadata, offset, rate, cuts=cuts, bridge_metadata=bridge_metadata,
+            hid=hid, bridge_hid=bridge_hid
+        )
         if not timeline:
             raise ValueError("empty audio timeline")
+
         base = _base_url(request)
-        lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-PLAYLIST-TYPE:VOD",
-                 f"#EXT-X-TARGETDURATION:{int(max(item['duration'] for item in timeline)) + 1}",
-                 "#EXT-X-MEDIA-SEQUENCE:0",
-                 f'#EXT-X-MAP:URI="{base}/dual/aud/{hid}/init.mp4?{urlencode({"o": o, "r": r, "t": token})}"']
+        target_duration = int(max(item["duration"] for item in timeline)) + 1
+        lines = [
+            "#EXTM3U",
+            "#EXT-X-VERSION:7",
+            "#EXT-X-PLAYLIST-TYPE:VOD",
+            f"#EXT-X-TARGETDURATION:{target_duration}",
+            "#EXT-X-MEDIA-SEQUENCE:0",
+        ]
+
+        current_map_hid = None
         for item in timeline:
-            query = urlencode({"o": o, "r": r, "t": token})
-            lines += [f"#EXTINF:{item['duration']:.6f},", f"{base}/dual/aud/{hid}/s{item['idx']}.m4s?{query}"]
+            item_hid = item.get("hid") or hid
+            item_query = {"o": o, "r": r, "t": token}
+            if c:
+                item_query["c"] = c
+            if b:
+                item_query["b"] = b
+            q_str = urlencode(item_query)
+
+            if item.get("discontinuity"):
+                lines.append("#EXT-X-DISCONTINUITY")
+
+            if current_map_hid != item_hid:
+                current_map_hid = item_hid
+                lines.append(f'#EXT-X-MAP:URI="{base}/dual/aud/{item_hid}/init.mp4?{q_str}"')
+
+            lines.append(f"#EXTINF:{item['duration']:.6f},")
+            lines.append(f"{base}/dual/aud/{item_hid}/s{item['idx']}.m4s?{q_str}")
+
         lines.append("#EXT-X-ENDLIST")
         return Response("\n".join(lines) + "\n", media_type="application/vnd.apple.mpegurl",
                         headers={"Access-Control-Allow-Origin": "*", "Cache-Control": "no-cache"})
@@ -147,25 +183,37 @@ async def audio_playlist(hid: str, request: Request, o: int = 0, r: int = 1_000_
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@app.get("/dual/aud/{hid}/init.mp4")
-async def audio_init(hid: str, request: Request, o: int = 0, r: int = 1_000_000_000):
+@app.api_route("/dual/aud/{hid}/init.mp4", methods=["GET", "HEAD"])
+async def audio_init(hid: str, request: Request, o: int = 0, r: int = 1_000_000_000,
+                     c: str = "", b: str = ""):
     _require_session(request)
     try:
         metadata = audio.metadata(hid)
-        timeline = audio.timeline(metadata, o / 1000.0, r / 1_000_000_000)
+        cuts = parse_cuts_param(c) if c else None
+        bridge_hid = b.strip() if b else ""
+        bridge_metadata = audio.metadata(bridge_hid) if bridge_hid else None
+        timeline = audio.timeline(metadata, o / 1000.0, r / 1_000_000_000, cuts=cuts,
+                                  bridge_metadata=bridge_metadata, hid=hid, bridge_hid=bridge_hid)
         if not timeline:
             raise ValueError("empty audio timeline")
-        init_path, _ = await audio.fragment(hid, timeline[0]["idx"], o / 1000.0, r / 1_000_000_000)
+        first_seg = next((item["idx"] for item in timeline if item.get("hid", hid) == hid), 0)
+        init_path, _ = await audio.fragment(hid, first_seg, o / 1000.0, r / 1_000_000_000,
+                                            cuts=cuts, bridge_metadata=bridge_metadata)
         return _audio_response(init_path, "video/mp4", "public, max-age=3600")
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
 
-@app.get("/dual/aud/{hid}/s{idx}.m4s")
-async def audio_segment(hid: str, idx: int, request: Request, o: int = 0, r: int = 1_000_000_000):
+@app.api_route("/dual/aud/{hid}/s{idx}.m4s", methods=["GET", "HEAD"])
+async def audio_segment(hid: str, idx: int, request: Request, o: int = 0, r: int = 1_000_000_000,
+                        c: str = "", b: str = ""):
     _require_session(request)
     try:
-        _, fragment_path = await audio.fragment(hid, idx, o / 1000.0, r / 1_000_000_000)
+        cuts = parse_cuts_param(c) if c else None
+        bridge_hid = b.strip() if b else ""
+        bridge_metadata = audio.metadata(bridge_hid) if bridge_hid else None
+        _, fragment_path = await audio.fragment(hid, idx, o / 1000.0, r / 1_000_000_000,
+                                                cuts=cuts, bridge_metadata=bridge_metadata)
         return _audio_response(fragment_path, "video/iso.segment", "public, max-age=3600")
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
         raise HTTPException(status_code=404, detail=str(exc))
