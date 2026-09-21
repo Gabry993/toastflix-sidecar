@@ -126,10 +126,13 @@ class SyncEngine:
         if map_url:
             await self._download(map_url, directory / "video-init.mp4", headers)
             lines.append('#EXT-X-MAP:URI="video-init.mp4"')
+        download_tasks = [
+            self._download(item["url"], directory / f"video-{number}.m4s", headers)
+            for number, item in enumerate(selected)
+        ]
+        await asyncio.gather(*download_tasks)
         for number, item in enumerate(selected):
-            name = f"video-{number}.m4s"
-            await self._download(item["url"], directory / name, headers)
-            lines += [f"#EXTINF:{item['duration']:.6f},", name]
+            lines += [f"#EXTINF:{item['duration']:.6f},", f"video-{number}.m4s"]
         lines.append("#EXT-X-ENDLIST")
         playlist = directory / "video.m3u8"
         playlist.write_text("\n".join(lines) + "\n")
@@ -153,10 +156,13 @@ class SyncEngine:
         if map_url:
             await self._download(map_url, directory / "reference-init.mp4", headers)
             lines.append('#EXT-X-MAP:URI="reference-init.mp4"')
+        download_tasks = [
+            self._download(item["url"], directory / f"reference-{number}.m4s", headers)
+            for number, item in enumerate(selected)
+        ]
+        await asyncio.gather(*download_tasks)
         for number, item in enumerate(selected):
-            name = f"reference-{number}.m4s"
-            await self._download(item["url"], directory / name, headers)
-            lines += [f"#EXTINF:{item['duration']:.6f},", name]
+            lines += [f"#EXTINF:{item['duration']:.6f},", f"reference-{number}.m4s"]
         lines.append("#EXT-X-ENDLIST")
         playlist = directory / "reference.m3u8"
         playlist.write_text("\n".join(lines) + "\n")
@@ -191,7 +197,15 @@ class SyncEngine:
                 "-of", "default=nw=1:nk=1", str(sample),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
-            output, _ = await asyncio.wait_for(process.communicate(), timeout=20)
+            try:
+                output, _ = await asyncio.wait_for(process.communicate(), timeout=20)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                    await process.communicate()
+                except Exception:
+                    pass
+                raise
             values = [float(x) for x in output.decode(errors="replace").strip().splitlines() if x.strip()]
             return round(values[0], 3) if values else 0.0
         finally:
@@ -215,10 +229,13 @@ class SyncEngine:
         if encrypted and (self.audio._dir(hid) / "enc.key").exists():
             lines.append(f'#EXT-X-KEY:METHOD=AES-128,URI="audio.key"{iv}')
             (directory / "audio.key").write_bytes((self.audio._dir(hid) / "enc.key").read_bytes())
+        download_tasks = [
+            self._download(metadata["segs"][item], directory / f"audio-{number}.ts", metadata.get("headers") or {})
+            for number, item in enumerate(selected)
+        ]
+        await asyncio.gather(*download_tasks)
         for number, item in enumerate(selected):
-            name = f"audio-{number}.ts"
-            await self._download(metadata["segs"][item], directory / name, metadata.get("headers") or {})
-            lines += [f"#EXTINF:{metadata['durs'][item]:.6f},", name]
+            lines += [f"#EXTINF:{metadata['durs'][item]:.6f},", f"audio-{number}.ts"]
         lines.append("#EXT-X-ENDLIST")
         playlist = directory / "audio.m3u8"
         playlist.write_text("\n".join(lines) + "\n")
@@ -235,7 +252,15 @@ class SyncEngine:
             command += ["-map", "0:a:0", "-vn"]
         command += ["-ac", "1", "-ar", "8000", "-f", "s16le", "-y", str(output)]
         process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
-        _, error = await asyncio.wait_for(process.communicate(), timeout=60)
+        try:
+            _, error = await asyncio.wait_for(process.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+                await process.communicate()
+            except Exception:
+                pass
+            raise
         min_size = int(sample_seconds * 8000 * 2 * 0.70)
         if process.returncode or not output.exists() or output.stat().st_size < min_size:
             raise RuntimeError((error.decode(errors="replace") or "sample decode failed")[:300])
@@ -494,16 +519,17 @@ class SyncEngine:
                 video_dir.mkdir(exist_ok=True)
                 audio_dir.mkdir(exist_ok=True)
                 if reference_audio_url:
-                    reference_playlist, reference_seek, _ = await self._decode_reference_audio(
+                    ref_coro = self._decode_reference_audio(
                         reference_audio_url, video_headers, position, video_dir, sample_seconds=duration
                     )
                 else:
-                    reference_playlist, reference_seek, _ = await self._decode_video(
+                    ref_coro = self._decode_video(
                         sample_video_url, video_headers, position, video_dir, sample_seconds=duration
                     )
-                audio_playlist, audio_seek, _ = await self._decode_audio(
+                aud_coro = self._decode_audio(
                     audio_hid, position, audio_dir, sample_seconds=duration
                 )
+                (reference_playlist, reference_seek, _), (audio_playlist, audio_seek, _) = await asyncio.gather(ref_coro, aud_coro)
                 video_pcm, audio_pcm = root / f"video-{index}.pcm", root / f"audio-{index}.pcm"
                 samples = await asyncio.gather(
                     self._pcm(reference_playlist, reference_seek, video_pcm, sample_seconds=duration),
