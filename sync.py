@@ -34,8 +34,11 @@ class SyncEngine:
         if not valid_public_url(url) or not await resolves_publicly(url):
             raise ValueError("media URL is not public HTTPS")
         kwargs = {"timeout": 30, "follow_redirects": False}
-        if self.proxy:
-            kwargs["proxy"] = self.proxy
+        proxy = self.proxy
+        if not proxy and "partite.cc" in url:
+            proxy = os.getenv("SIDECAR_AUDIO_PROXY", "socks5h://172.17.0.1:1080")
+        if proxy:
+            kwargs["proxy"] = proxy
         try:
             async with httpx.AsyncClient(**kwargs) as client:
                 response = await client.get(url, headers=headers)
@@ -123,10 +126,13 @@ class SyncEngine:
         if map_url:
             await self._download(map_url, directory / "video-init.mp4", headers)
             lines.append('#EXT-X-MAP:URI="video-init.mp4"')
+        download_tasks = [
+            self._download(item["url"], directory / f"video-{number}.m4s", headers)
+            for number, item in enumerate(selected)
+        ]
+        await asyncio.gather(*download_tasks)
         for number, item in enumerate(selected):
-            name = f"video-{number}.m4s"
-            await self._download(item["url"], directory / name, headers)
-            lines += [f"#EXTINF:{item['duration']:.6f},", name]
+            lines += [f"#EXTINF:{item['duration']:.6f},", f"video-{number}.m4s"]
         lines.append("#EXT-X-ENDLIST")
         playlist = directory / "video.m3u8"
         playlist.write_text("\n".join(lines) + "\n")
@@ -150,39 +156,58 @@ class SyncEngine:
         if map_url:
             await self._download(map_url, directory / "reference-init.mp4", headers)
             lines.append('#EXT-X-MAP:URI="reference-init.mp4"')
+        download_tasks = [
+            self._download(item["url"], directory / f"reference-{number}.m4s", headers)
+            for number, item in enumerate(selected)
+        ]
+        await asyncio.gather(*download_tasks)
         for number, item in enumerate(selected):
-            name = f"reference-{number}.m4s"
-            await self._download(item["url"], directory / name, headers)
-            lines += [f"#EXTINF:{item['duration']:.6f},", name]
+            lines += [f"#EXTINF:{item['duration']:.6f},", f"reference-{number}.m4s"]
         lines.append("#EXT-X-ENDLIST")
         playlist = directory / "reference.m3u8"
         playlist.write_text("\n".join(lines) + "\n")
         return playlist, local_seek, duration
 
     async def _media_start_time(self, url: str, headers: dict) -> float:
-        """Read the initial timestamp of Cinejoy's video-only fMP4 stream."""
+        """Read the initial timestamp of video HLS stream (fMP4 or MPEG-TS)."""
         response = await self._get(url, headers)
         match = re.search(r'#EXT-X-MAP:URI="([^"]+)"', response.text)
         first = next((line.strip() for line in response.text.splitlines()
                       if line.strip() and not line.startswith("#")), "")
-        if not match or not first:
+        if not first:
             return 0.0
-        init_response, segment_response = await asyncio.gather(
-            self._get(urljoin(url, match.group(1)), headers),
-            self._get(urljoin(url, first), headers),
-        )
-        root = Path(tempfile.mkdtemp(prefix="cinejoy-start-"))
+        segment = urljoin(url, first)
+        if match:
+            init_response, segment_response = await asyncio.gather(
+                self._get(urljoin(url, match.group(1)), headers),
+                self._get(segment, headers),
+            )
+            sample_data = init_response.content + segment_response.content
+            ext = ".mp4"
+        else:
+            segment_response = await self._get(segment, headers)
+            sample_data = segment_response.content
+            ext = ".ts"
+        root = Path(tempfile.mkdtemp(prefix="video-start-"))
         try:
-            sample = root / "sample.mp4"
-            sample.write_bytes(init_response.content + segment_response.content)
+            sample = root / f"sample{ext}"
+            sample.write_bytes(sample_data)
             process = await asyncio.create_subprocess_exec(
                 "ffprobe", "-v", "error", "-show_entries", "stream=start_time",
                 "-of", "default=nw=1:nk=1", str(sample),
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
-            output, _ = await asyncio.wait_for(process.communicate(), timeout=20)
-            values = output.decode(errors="replace").strip().splitlines()
-            return float(values[0]) if values else 0.0
+            try:
+                output, _ = await asyncio.wait_for(process.communicate(), timeout=20)
+            except asyncio.TimeoutError:
+                try:
+                    process.kill()
+                    await process.communicate()
+                except Exception:
+                    pass
+                raise
+            values = [float(x) for x in output.decode(errors="replace").strip().splitlines() if x.strip()]
+            return round(values[0], 3) if values else 0.0
         finally:
             shutil.rmtree(root, ignore_errors=True)
 
@@ -199,13 +224,18 @@ class SyncEngine:
         selected = range(first, max(first + 1, last))
         iv = f",IV={metadata['iv']}" if metadata.get("iv") else ""
         lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-PLAYLIST-TYPE:VOD",
-                 f"#EXT-X-TARGETDURATION:{int(max(metadata['durs'][item] for item in selected)) + 1}",
-                 f'#EXT-X-KEY:METHOD=AES-128,URI="audio.key"{iv}']
-        (directory / "audio.key").write_bytes((self.audio._dir(hid) / "enc.key").read_bytes())
+                 f"#EXT-X-TARGETDURATION:{int(max(metadata['durs'][item] for item in selected)) + 1}"]
+        encrypted = metadata.get("encrypted", True)
+        if encrypted and (self.audio._dir(hid) / "enc.key").exists():
+            lines.append(f'#EXT-X-KEY:METHOD=AES-128,URI="audio.key"{iv}')
+            (directory / "audio.key").write_bytes((self.audio._dir(hid) / "enc.key").read_bytes())
+        download_tasks = [
+            self._download(metadata["segs"][item], directory / f"audio-{number}.ts", metadata.get("headers") or {})
+            for number, item in enumerate(selected)
+        ]
+        await asyncio.gather(*download_tasks)
         for number, item in enumerate(selected):
-            name = f"audio-{number}.ts"
-            await self._download(metadata["segs"][item], directory / name, metadata.get("headers") or {})
-            lines += [f"#EXTINF:{metadata['durs'][item]:.6f},", name]
+            lines += [f"#EXTINF:{metadata['durs'][item]:.6f},", f"audio-{number}.ts"]
         lines.append("#EXT-X-ENDLIST")
         playlist = directory / "audio.m3u8"
         playlist.write_text("\n".join(lines) + "\n")
@@ -222,7 +252,15 @@ class SyncEngine:
             command += ["-map", "0:a:0", "-vn"]
         command += ["-ac", "1", "-ar", "8000", "-f", "s16le", "-y", str(output)]
         process = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
-        _, error = await asyncio.wait_for(process.communicate(), timeout=60)
+        try:
+            _, error = await asyncio.wait_for(process.communicate(), timeout=60)
+        except asyncio.TimeoutError:
+            try:
+                process.kill()
+                await process.communicate()
+            except Exception:
+                pass
+            raise
         min_size = int(sample_seconds * 8000 * 2 * 0.70)
         if process.returncode or not output.exists() or output.stat().st_size < min_size:
             raise RuntimeError((error.decode(errors="replace") or "sample decode failed")[:300])
@@ -424,25 +462,46 @@ class SyncEngine:
         sample_video_url = await self._vidfast_sample_url(
             video_url, video_headers, video_duration, provider
         )
-        video_start_time = 0.0
-        if reference_audio_url:
-            video_start_time = await self._media_start_time(video_url, video_headers)
+        video_start_time = await self._media_start_time(video_url, video_headers)
+        if video_start_time > 0.001:
+            print(f"[sidecar sync] video container start timestamp: {video_start_time:.3f}s")
         reference_duration = video_duration
         if reference_audio_url:
             reference_entries, _ = await self._video_entries(reference_audio_url, video_headers)
             reference_duration = sum(item["duration"] for item in reference_entries)
-            if abs(reference_duration - video_duration) > 1.0:
-                raise ValueError("reference audio timeline mismatch")
+            ref_diff = abs(reference_duration - video_duration)
+            if ref_diff > 60.0:
+                return {
+                    "status": "incompatible",
+                    "video_duration": video_duration,
+                    "reference_duration": reference_duration,
+                    "audio_duration": sum(metadata.get("durs", [])),
+                    "error": f"Discrepanza timeline reference audio ({ref_diff:.1f}s)",
+                    "provider": provider,
+                    "server": payload.get("server", ""),
+                    "sync_algorithm": self.SYNC_ALGORITHM,
+                }
         audio_duration = sum(metadata["durs"])
         common = min(video_duration, reference_duration, audio_duration)
         if common < 90:
-            raise ValueError("media too short")
+            return {
+                "status": "incompatible",
+                "video_duration": video_duration,
+                "reference_duration": reference_duration,
+                "audio_duration": audio_duration,
+                "error": f"Durata media comune insufficiente ({common:.1f}s < 90s)",
+                "provider": provider,
+                "server": payload.get("server", ""),
+                "sync_algorithm": self.SYNC_ALGORITHM,
+            }
 
-        # Fast Pass: 3 points @ 5s each
+        # Fast Pass: Intro (~3m) + 3 points
+        intro_pos = min(180.0, max(30.0, common * 0.03))
         fast_points = [
-            (round(common * 0.2, 3), 5.0),
-            (round(common * 0.4, 3), 5.0),
-            (round(common * 0.7, 3), 5.0),
+            (round(intro_pos, 3), 5.0),
+            (round(common * 0.25, 3), 5.0),
+            (round(common * 0.50, 3), 5.0),
+            (round(common * 0.75, 3), 5.0),
         ]
         fallback_positions = sorted({
             min(60.0, common * 0.1),
@@ -460,16 +519,17 @@ class SyncEngine:
                 video_dir.mkdir(exist_ok=True)
                 audio_dir.mkdir(exist_ok=True)
                 if reference_audio_url:
-                    reference_playlist, reference_seek, _ = await self._decode_reference_audio(
+                    ref_coro = self._decode_reference_audio(
                         reference_audio_url, video_headers, position, video_dir, sample_seconds=duration
                     )
                 else:
-                    reference_playlist, reference_seek, _ = await self._decode_video(
+                    ref_coro = self._decode_video(
                         sample_video_url, video_headers, position, video_dir, sample_seconds=duration
                     )
-                audio_playlist, audio_seek, _ = await self._decode_audio(
+                aud_coro = self._decode_audio(
                     audio_hid, position, audio_dir, sample_seconds=duration
                 )
+                (reference_playlist, reference_seek, _), (audio_playlist, audio_seek, _) = await asyncio.gather(ref_coro, aud_coro)
                 video_pcm, audio_pcm = root / f"video-{index}.pcm", root / f"audio-{index}.pcm"
                 samples = await asyncio.gather(
                     self._pcm(reference_playlist, reference_seek, video_pcm, sample_seconds=duration),
@@ -506,8 +566,7 @@ class SyncEngine:
                         "audio_duration": audio_duration,
                         "measurements": measurements,
                     }
-                    if reference_audio_url:
-                        result["video_start_time"] = round(video_start_time, 3)
+                    result["video_start_time"] = round(video_start_time, 3)
                     result["sync_algorithm"] = self.SYNC_ALGORITHM
                     result["cache_key"] = cache_key
                     return result
@@ -530,8 +589,10 @@ class SyncEngine:
             video_start_time=video_start_time,
             correlation_floor=correlation_floor,
         )
-        if reference_audio_url and result.get("status") == "ok":
+        if result.get("status") == "ok":
             result["video_start_time"] = round(video_start_time, 3)
         result["sync_algorithm"] = self.SYNC_ALGORITHM
         result["cache_key"] = cache_key
+        result["provider"] = provider
+        result["server"] = payload.get("server", "")
         return result

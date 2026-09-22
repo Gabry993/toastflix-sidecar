@@ -88,9 +88,12 @@ class AudioStore:
         self._validate_segments(segments)
         if len(durations) < len(segments):
             raise ValueError("audio durations do not match segments")
-        key = base64.b64decode(key_b64, validate=True)
-        if len(key) != 16:
-            raise ValueError("AES key must be 16 bytes")
+        encrypted = bool(key_b64 and str(key_b64).strip())
+        key = None
+        if encrypted:
+            key = base64.b64decode(key_b64, validate=True)
+            if len(key) != 16:
+                raise ValueError("AES key must be 16 bytes")
         safe_headers = {
             str(name): str(value).strip()
             for name, value in (headers or {}).items()
@@ -105,7 +108,13 @@ class AudioStore:
         directory = self._dir(hid)
         async with self._lock(hid):
             directory.mkdir(parents=True, exist_ok=True)
-            (directory / "enc.key").write_bytes(key)
+            if encrypted and key:
+                (directory / "enc.key").write_bytes(key)
+            elif (directory / "enc.key").exists():
+                try:
+                    (directory / "enc.key").unlink()
+                except OSError:
+                    pass
             starts, total = [], 0.0
             for duration in durations[:len(segments)]:
                 starts.append(total)
@@ -114,7 +123,8 @@ class AudioStore:
                 "segs": segments,
                 "durs": durations[:len(segments)],
                 "starts": starts,
-                "iv": (re.search(r"IV=(0x[0-9A-Fa-f]+)", key_line) or [None, None])[1],
+                "iv": (re.search(r"IV=(0x[0-9A-Fa-f]+)", key_line) or [None, None])[1] if encrypted else None,
+                "encrypted": encrypted,
                 "media_key": str(media_key or ""),
                 "language": language,
                 "headers": safe_headers,
@@ -280,8 +290,11 @@ class AudioStore:
         if not valid_public_url(url):
             raise ValueError("audio URL is not public HTTPS")
         kwargs = {"timeout": 30, "follow_redirects": True}
-        if self.proxy:
-            kwargs["proxy"] = self.proxy
+        proxy = self.proxy
+        if not proxy and "partite.cc" in url:
+            proxy = os.getenv("SIDECAR_AUDIO_PROXY", "socks5h://172.17.0.1:1080")
+        if proxy:
+            kwargs["proxy"] = proxy
         async with httpx.AsyncClient(**kwargs) as client:
             response = await client.get(url, headers=headers)
             response.raise_for_status()
@@ -368,12 +381,16 @@ class AudioStore:
             try:
                 source = await self._download(metadata["segs"][index], metadata.get("headers") or {})
                 (work / "src.ts").write_bytes(source)
-                (work / "enc.key").write_bytes((directory / "enc.key").read_bytes())
-                iv = f",IV={metadata['iv']}" if metadata.get("iv") else ""
+                encrypted = metadata.get("encrypted", True)
+                key_clause = ""
+                if encrypted and (directory / "enc.key").exists():
+                    (work / "enc.key").write_bytes((directory / "enc.key").read_bytes())
+                    iv = f",IV={metadata['iv']}" if metadata.get("iv") else ""
+                    key_clause = f'#EXT-X-KEY:METHOD=AES-128,URI="enc.key"{iv}\n'
                 (work / "input.m3u8").write_text(
                     "#EXTM3U\n#EXT-X-VERSION:3\n"
                     f"#EXT-X-TARGETDURATION:{int(metadata['durs'][index]) + 1}\n"
-                    f"#EXT-X-KEY:METHOD=AES-128,URI=\"enc.key\"{iv}\n"
+                    f"{key_clause}"
                     f"#EXTINF:{metadata['durs'][index]:.6f},\nsrc.ts\n#EXT-X-ENDLIST\n"
                 )
                 command = ["ffmpeg", "-v", "error", "-allowed_extensions", "ALL", "-protocol_whitelist", "file,crypto", "-i", "input.m3u8"]
@@ -381,7 +398,15 @@ class AudioStore:
                     command += ["-ss", f"{item['trim']:.6f}"]
                 command += ["-c:a", "copy", "-bsf:a", "aac_adtstoasc", "-f", "hls", "-hls_time", "99999", "-hls_playlist_type", "vod", "-hls_segment_type", "fmp4", "-hls_fmp4_init_filename", "init.mp4", "-hls_segment_filename", "f%d.m4s", "-hls_list_size", "0", "-y", "output.m3u8"]
                 process = await asyncio.create_subprocess_exec(*command, cwd=work, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
-                _, error = await asyncio.wait_for(process.communicate(), timeout=60)
+                try:
+                    _, error = await asyncio.wait_for(process.communicate(), timeout=60)
+                except asyncio.TimeoutError:
+                    try:
+                        process.kill()
+                        await process.communicate()
+                    except Exception:
+                        pass
+                    raise
                 made = work / "f0.m4s"
                 if process.returncode or not made.exists():
                     raise RuntimeError((error.decode(errors="replace") or "ffmpeg failed")[:300])
