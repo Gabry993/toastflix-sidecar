@@ -1,131 +1,194 @@
 # ToastFlix Audio Sidecar
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/qwertyuiop8899/toastflix-sidecar)
 
-Questo servizio gestisce solo l'audio del DUAL ToastFlix.
+Microservizio dedicato alla sincronizzazione e fornitura dell'audio italiano per i flussi **4K / FHD Dual Audio** di ToastFlix.
 
-- Il video continua a passare dal proxy locale di Stremio.
-- Il browser dell'utente recupera da vixsrc playlist, token e chiave audio.
-- Il sidecar scarica i segmenti audio gia' autorizzati, usa `ffmpeg` e serve l'audio convertito.
-- Se `dualAudioHost` non viene configurato in ToastFlix, il sidecar non viene usato.
+- **Audio dedicato**: scarica i segmenti audio, li normalizza/converte con `ffmpeg` ed esegue l'allineamento temporale (offset acustico o da database).
+- **Leggero e indipendente**: il video continua a passare normalmente dai provider o dal proxy video; il sidecar si occupa esclusivamente della traccia audio.
+- **Supporto avanzato**: gestisce delay acustici, correzione framerate/deriva FPS (PAL 25fps / Cinema 23.976fps) e i tagli/ponti audio di ToastFlix Cuts Studio.
 
-## Pubblicare Su GHCR
+---
 
-GHCR significa GitHub Container Registry. L'immagine viene costruita da GitHub
-Actions e pubblicata su:
+## 🚀 Modalità di Installazione
 
-```text
-ghcr.io/qwertyuiop8899/toastflix-sidecar:latest
-```
+Scegli la modalità più adatta al tuo ambiente:
 
-### 1. Creare il workflow GitHub
+| Modalità | Difficoltà | Ideale per | Requisiti |
+| :--- | :--- | :--- | :--- |
+| **1. Deploy Cloud 1-Click** | 🟢 Facile | Chi non vuole gestire server o porte | Account Render (Gratuito) |
+| **2. Docker con Immagine (GHCR)** | 🟡 Intermedio | VPS, NAS o Server casalingo | Docker |
+| **3. Docker da Sorgente (Build)** | 🟡 Intermedio | Modifiche al codice o build custom | Docker & Git |
+| **4. Locale Diretto (Python)** | 🟢 Facile | PC Windows, Mac o Linux (stesso di Stremio) | Python 3.10+ & FFmpeg |
 
-Nel repository GitHub `qwertyuiop8899/toastflix-sidecar`:
+---
 
-1. Apri `Actions`.
-2. Premi `New workflow`.
-3. Premi `set up a workflow yourself`.
-4. Incolla questo contenuto.
-5. Salva il file come `.github/workflows/publish-ghcr.yml` sul branch `main`.
+### 1. ☁️ Deploy Cloud Gratuito (Render)
+
+Il modo più rapido per avere il Sidecar attivo 24/7 con HTTPS automatico senza aprire porte sul router:
+
+1. Clicca sul pulsante **[Deploy to Render](https://render.com/deploy?repo=https://github.com/qwertyuiop8899/toastflix-sidecar)** in alto.
+2. Accedi o registrati su Render (gratuito).
+3. Assegna un nome al servizio e conferma la creazione.
+4. Al termine del deploy, copia l'URL HTTPS assegnato (es. `https://sidecar-xxxx.onrender.com`).
+5. Inserisci questo URL come **Server audio DUAL** nella pagina `/configure` di ToastFlix.
+
+---
+
+### 2. 🐳 Docker con Immagine Pre-costruita (GHCR)
+
+L'immagine ufficiale è già compilata e pronta su GitHub Container Registry:  
+`ghcr.io/qwertyuiop8899/toastflix-sidecar:latest`
+
+#### Opzione A: Con Docker Compose (Consigliato)
+Crea una cartella e salva questo `compose.yml`:
 
 ```yaml
-name: Pubblica immagine GHCR
-
-on:
-  push:
-    branches: [main]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  packages: write
-
-jobs:
-  build:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Login GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build e pubblica
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/toastflix-sidecar:latest
-            ghcr.io/${{ github.repository_owner }}/toastflix-sidecar:sha-${{ github.sha }}
+services:
+  sidecar:
+    image: ghcr.io/qwertyuiop8899/toastflix-sidecar:latest
+    container_name: toast-audio-sidecar
+    restart: unless-stopped
+    ports:
+      - "3169:3107"
+    environment:
+      - SIDECAR_PUBLIC_URL=https://audio.tuodominio.com  # opzionale se esposto pubblicamente
+      - CORS_ORIGINS=*
+    volumes:
+      - ./sidecar-data:/app/data
 ```
 
-6. Vai in `Actions` e aspetta che il workflow finisca con successo.
-7. Controlla il pacchetto nella sezione `Packages` del profilo GitHub.
+Avvia con:
+```bash
+docker compose up -d
+```
 
-Alla prima pubblicazione il pacchetto puo' essere privato. Se vuoi usarlo da
-un server senza login, apri le impostazioni del pacchetto GHCR e imposta
-`visibility: Public`.
+#### Opzione B: Con Docker Run (Comando singolo)
+```bash
+docker run -d \
+  --name toast-audio-sidecar \
+  --restart unless-stopped \
+  -p 3169:3107 \
+  -v ./sidecar-data:/app/data \
+  ghcr.io/qwertyuiop8899/toastflix-sidecar:latest
+```
 
-## Installare Su Una Macchina
+---
 
-Requisiti:
+### 3. 🛠️ Docker da Sorgente (Senza immagine pre-costruita)
 
-- Docker;
-- Docker Compose;
-- un hostname DNS pubblico che punti alla macchina;
-- porte TCP `80` e `443` raggiungibili per il reverse proxy e il certificato TLS;
-- la porta interna del sidecar (`3169` sull'host) raggiungibile dal reverse proxy.
+Se hai clonato il repository e preferisci compilare il container localmente con il `Dockerfile`:
 
-## Hostname Pubblico HTTPS Obbligatorio
+```bash
+git clone https://github.com/qwertyuiop8899/toastflix-sidecar.git
+cd toastflix-sidecar
+```
 
-`dualAudioHost` deve essere un hostname DNS pubblico raggiungibile dal dispositivo
-che usa Stremio e deve usare HTTPS con un certificato valido. Sono validi anche i
-nomi gratuiti DuckDNS.
+#### Con Docker Compose:
+```bash
+docker compose up -d --build
+```
 
-Non usare:
+#### Con Docker CLI diretto:
+```bash
+docker build -t toastflix-sidecar .
+docker run -d \
+  --name toast-audio-sidecar \
+  --restart unless-stopped \
+  -p 3169:3107 \
+  -v ./data:/app/data \
+  toastflix-sidecar
+```
 
-- `http://127.0.0.1:3169` o `http://localhost:3169`;
-- un indirizzo IP privato o un hostname SSH della VPS;
-- un URL HTTP senza certificato TLS.
+---
 
-### Esempio DuckDNS
+### 4. 💻 Installazione Locale Diretta (Senza Docker)
 
-1. Crea un sottodominio, per esempio `toast-audio.duckdns.org`, nel pannello DuckDNS.
-2. Imposta l'indirizzo IP pubblico della macchina. Se l'IP cambia, configura il
-   client di aggiornamento DuckDNS sulla macchina. Non salvare il token DuckDNS
-   nel repository.
-3. Configura un reverse proxy che riceva il traffico HTTPS e inoltri al sidecar
-   locale sulla porta `3169`.
+Ideale se esegui Stremio sullo stesso computer (Windows, macOS o Linux) e non vuoi usare Docker.
 
-Con Caddy, crea un blocco simile in `/etc/caddy/Caddyfile`:
+#### Requisiti:
+- **Python 3.10** o versione successiva.
+- **FFmpeg** installato e configurato nel PATH di sistema:
+  - **Windows**: Scarica FFmpeg da [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) ed estrai `ffmpeg.exe` aggiungendolo alle variabili d'ambiente (PATH), oppure tramite:
+    ```powershell
+    winget install Gyan.FFmpeg
+    ```
+  - **macOS**:
+    ```bash
+    brew install ffmpeg
+    ```
+  - **Linux (Ubuntu/Debian)**:
+    ```bash
+    sudo apt update && sudo apt install -y ffmpeg
+    ```
 
+#### Procedura:
+1. Clona il repository o scarica i file:
+   ```bash
+   git clone https://github.com/qwertyuiop8899/toastflix-sidecar.git
+   cd toastflix-sidecar
+   ```
+
+2. Crea e attiva un virtual environment:
+   ```bash
+   python3 -m venv venv
+   # Linux/macOS:
+   source venv/bin/activate
+   # Windows (PowerShell):
+   .\venv\Scripts\Activate.ps1
+   # Windows (CMD):
+   .\venv\Scripts\activate.bat
+   ```
+
+3. Installa le dipendenze:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Avvia il server:
+   ```bash
+   uvicorn app:app --host 0.0.0.0 --port 3000
+   ```
+   Il sidecar sarà in ascolto su `http://localhost:3000`.
+
+---
+
+## 🔗 Collegamento a ToastFlix
+
+Una volta avviato il Sidecar:
+
+1. Apri la pagina di configurazione di ToastFlix (es. `/configure`).
+2. Al **Passo 3 (4K Dual Audio)** seleziona **SÌ, ATTIVA DUAL AUDIO**.
+3. Seleziona **Sidecar**.
+4. Inserisci l'indirizzo del tuo Sidecar:
+   - Se installato in **locale**: `http://localhost:3000` (oppure `http://127.0.0.1:3000`).
+   - Se installato su **Render**: l'URL fornito da Render (es. `https://sidecar-xxxx.onrender.com`).
+   - Se installato su **VPS con Docker e dominio HTTPS**: `https://audio.tuodominio.com`.
+5. Prosegui fino al Passo 7 e installa il manifest generato su Stremio!
+
+---
+
+## 🌐 Configurazione Reverse Proxy HTTPS (Opzionale per VPS)
+
+Se installi il Sidecar su una VPS e desideri usarlo su Smart TV o dispositivi esterni, è raccomandato un certificato HTTPS valido (es. con Caddy o Nginx + Certbot).
+
+### Con Caddy (Consigliato per semplicità)
+Aggiungi in `/etc/caddy/Caddyfile`:
 ```caddyfile
-toast-audio.duckdns.org {
+audio.tuodominio.com {
     reverse_proxy 127.0.0.1:3169
 }
 ```
-
-Caddy richiede che le porte `80` e `443` siano aperte e ottiene/rinnova
-automaticamente il certificato. Riavvia poi Caddy e verifica:
-
+Poi ricarica Caddy:
 ```bash
 sudo systemctl reload caddy
-curl https://toast-audio.duckdns.org/health
 ```
 
-Con Nginx, usa inizialmente un virtual host HTTP per la verifica DNS:
-
+### Con Nginx + Certbot
+Aggiungi nel blocco del server:
 ```nginx
 server {
-    listen 80;
-    server_name toast-audio.duckdns.org;
-
+    server_name audio.tuodominio.com;
     location / {
         proxy_pass http://127.0.0.1:3169;
         proxy_set_header Host $host;
@@ -134,150 +197,29 @@ server {
     }
 }
 ```
-
-Dopo aver verificato che il nome punti alla macchina, abilita HTTPS con Certbot:
-
+E ottieni il certificato TLS:
 ```bash
-sudo certbot --nginx -d toast-audio.duckdns.org
-curl https://toast-audio.duckdns.org/health
+sudo certbot --nginx -d audio.tuodominio.com
 ```
 
-Nel file `.env` del sidecar usa sempre l'URL HTTPS pubblico, non l'indirizzo
-locale:
+---
 
-```env
-SIDECAR_PUBLIC_URL=https://toast-audio.duckdns.org
-```
+## ⚙️ Variabili di Ambiente (.env)
 
-Clona il repository:
+| Variabile | Default | Descrizione |
+| :--- | :--- | :--- |
+| `SIDECAR_PORT` | `3169` | Porta host esposta dal container |
+| `SIDECAR_PUBLIC_URL` | *(vuoto)* | URL pubblico HTTPS del sidecar (es. `https://audio.tuodominio.com`) |
+| `SIDECAR_CACHE_DIR` | `/app/data` | Cartella di memorizzazione temporanea dei segmenti e database offset |
+| `OFFSET_API_URL` | *(vuoto)* | URL API di ToastFlix per sincronizzare gli offset acustici con il database centrale |
+| `CORS_ORIGINS` | `*` | Origini consentite per le chiamate CORS |
 
-```bash
-git clone https://github.com/qwertyuiop8899/toastflix-sidecar.git
-cd toastflix-sidecar
-cp .env.example .env
-```
+---
 
-Nel file `.env` imposta l'indirizzo pubblico della macchina:
-
-```env
-SIDECAR_PUBLIC_URL=https://audio.example.com
-SIDECAR_PORT=3169
-SIDECAR_AUDIO_PROXY=
-```
-
-`SIDECAR_AUDIO_PROXY` deve restare vuoto. Il sidecar usa direttamente la
-connessione Internet della macchina e non dipende da WARP o da ToastFlix.
-
-`SIDECAR_PUBLIC_URL` deve essere un URL pubblico HTTPS con certificato valido.
-HTTP non e' supportato per il collegamento con Stremio.
-
-```env
-SIDECAR_PUBLIC_URL=https://audio.example.com
-```
-
-Avvia usando l'immagine pubblicata su GHCR. Nel `compose.yml`, sostituisci:
-
-```yaml
-build: .
-```
-
-con:
-
-```yaml
-image: ghcr.io/qwertyuiop8899/toastflix-sidecar:latest
-```
-
-Poi esegui:
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-Controlla lo stato:
-
-```bash
-docker compose ps
-docker compose logs -f
-curl https://audio.example.com/health
-```
-
-La risposta corretta e' simile a:
-
-```json
-{"status":"ok","service":"toast-audio-sidecar"}
-```
-
-## Collegarlo A ToastFlix
-
-Apri la configurazione di ToastFlix e attiva `FHD / 4K Remuxed`.
-
-Nel campo `Server audio DUAL` inserisci solo l'indirizzo del sidecar:
-
-```text
-https://audio.example.com
-```
-
-Il campo deve usare HTTPS e resta disabilitato quando `FHD / 4K Remuxed` e' spento.
-
-Non devi inserire token nella configurazione: il sidecar crea automaticamente
-un token temporaneo per ogni sessione.
-
-## Avvio Diretto Senza Compose
-
-Se preferisci usare Docker direttamente:
-
-```bash
-docker run -d \
-  --name toast-audio-sidecar \
-  --restart unless-stopped \
-  -p 3169:3107 \
-  --env-file .env \
-  -v toast-audio-data:/app/data \
-  ghcr.io/qwertyuiop8899/toastflix-sidecar:latest
-```
-
-## Offset Audio
-
-Il sidecar mantiene una cache offset locale.
-
-Se vuoi salvare e recuperare gli offset anche da un server centrale ToastFlix, imposta nel
-`.env`:
-
-```env
-OFFSET_API_URL=https://YOUR_TOASTFLIX_HOST/dual/offset
-```
-
-Il sidecar invia alla VPS solo metadati:
-
-- titolo e risoluzione;
-- fingerprint video/audio;
-- offset, rate e confidence.
-
-Non invia alla VPS segmenti audio, chiavi AES o file convertiti.
-
-## Aggiornare L'immagine
-
-Quando aggiorni il codice su GitHub:
-
-```bash
-docker compose pull
-docker compose up -d
-```
-
-Controlla poi:
-
-```bash
-docker compose logs --tail=100
-curl http://IP_DELLA_MACCHINA:3169/health
-```
-
-
-## Supporto Cuts Studio & Timeline Multi-Cut
+## 🎬 Supporto Cuts Studio & Timeline Multi-Cut
 
 Il sidecar supporta nativamente le regole avanzate generate da ToastFlix Cuts Studio:
-
-- **Offset Hardware fMP4 (`video_start_time`)**: gestito automaticamente in fase di sync acustico.
-- **FPS Rate Esteso (0.85x - 1.15x)**: supporto completo per conversioni di velocità e correzione deriva framerate (es. PAL 25fps -> Cinema 23.976fps con rate `0.959040` o viceversa `1.041667`).
-- **Tagli Multipli (`c=`)**: array JSON o Base64 URL-safe con intervalli temporali da scartare (`audio_cut`) o da colmare con discontinuità (`video_gap`, `mute`).
-- **Ponte Audio Inglese (`b=`)**: inserimento trasparente della traccia originale inglese (`bridge_hid`) durante le scene inedite con marcatori `#EXT-X-DISCONTINUITY` e `#EXT-X-MAP`.
+- **Offset Hardware fMP4 (`video_start_time`)**: sincronizzazione automatica dell'offset dei flussi HLS.
+- **Correzione Deriva FPS (0.85x - 1.15x)**: conversione dinamica del framerate audio (es. 25fps PAL vs 23.976fps Cinema).
+- **Tagli Multipli (`c=`)**: intervalli temporali da scartare o colmare con discontinuità.
+- **Ponte Audio Originale (`b=`)**: reinserimento automatico della traccia originale (inglese) nelle scene inedite o tagliate della versione italiana.

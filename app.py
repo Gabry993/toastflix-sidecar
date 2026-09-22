@@ -5,7 +5,7 @@ from urllib.parse import urlencode
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 
 from audio import AudioStore, parse_cuts_param
 from offsets import OffsetStore
@@ -52,6 +52,313 @@ def _base_url(request: Request) -> str:
 def _audio_url(request: Request, hid: str, token: str, offset: float = 0.0, rate: float = 1.0) -> str:
     query = urlencode({"o": int(round(offset * 1000)), "r": int(round(rate * 1_000_000_000)), "t": token})
     return f"{_base_url(request)}/dual/aud/{hid}/audio.m3u8?{query}"
+
+
+LANDING_HTML = """<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ToastFlix Audio Sidecar</title>
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🍞</text></svg>">
+    <style>
+        :root {
+            --bg: #0e0e11;
+            --card-bg: #18181c;
+            --border: #2e2e36;
+            --text: #f4f4f6;
+            --text-muted: #9494a0;
+            --accent: #ff9800;
+            --accent-purple: #7952ff;
+            --green: #22c55e;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 24px 16px;
+        }
+        .container {
+            max-width: 640px;
+            width: 100%;
+            background: var(--card-bg);
+            border: 2px solid var(--border);
+            border-radius: 16px;
+            box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .header {
+            padding: 18px 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .brand-icon {
+            font-size: 26px;
+            line-height: 1;
+        }
+        .brand-title {
+            font-size: 1.15rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            color: #fff;
+        }
+        .brand-subtitle {
+            font-size: 0.78rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+        .badge-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            background: rgba(34, 197, 94, 0.12);
+            color: #4ade80;
+            border: 1px solid rgba(34, 197, 94, 0.3);
+            border-radius: 999px;
+            padding: 4px 12px;
+            font-size: 0.76rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }
+        .badge-status::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: #22c55e;
+            border-radius: 50%;
+            box-shadow: 0 0 8px #22c55e;
+        }
+        .media-box {
+            position: relative;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border-bottom: 1px solid var(--border);
+        }
+        .media-box img {
+            width: 100%;
+            height: auto;
+            display: block;
+            object-fit: cover;
+            max-height: 440px;
+        }
+        .content {
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+        .info-card {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            font-size: 0.90rem;
+            line-height: 1.5;
+            color: #d1d1db;
+        }
+        .info-card strong {
+            color: #fff;
+        }
+        .url-box {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: #09090b;
+            border: 1px solid #3f3f46;
+            border-radius: 8px;
+            padding: 10px 14px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+            font-size: 0.85rem;
+            color: #38bdf8;
+            word-break: break-all;
+            margin-top: 10px;
+        }
+        .actions {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+        }
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 18px;
+            border-radius: 8px;
+            font-size: 0.86rem;
+            font-weight: 700;
+            text-decoration: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-primary {
+            background: var(--accent-purple);
+            color: #fff;
+            border: none;
+        }
+        .btn-primary:hover {
+            background: #653be0;
+            transform: translateY(-1px);
+        }
+        .btn-secondary {
+            background: #27272a;
+            color: #f4f4f6;
+            border: 1px solid #3f3f46;
+        }
+        .btn-secondary:hover {
+            background: #3f3f46;
+            transform: translateY(-1px);
+        }
+        .url-action-row {
+            margin-top: 12px;
+            display: flex;
+        }
+        .btn-toastflix {
+            width: 100%;
+            background: #ff9800;
+            color: #000;
+            border: 2px solid #000;
+            box-shadow: 3px 3px 0 #000;
+            padding: 12px 18px;
+            font-size: 0.95rem;
+            font-weight: 900;
+            cursor: pointer;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.15s ease;
+        }
+        .btn-toastflix:hover {
+            background: #ffa834;
+            transform: translate(-1px, -1px);
+            box-shadow: 4px 4px 0 #000;
+        }
+        .btn-toastflix:active {
+            transform: translate(2px, 2px);
+            box-shadow: 1px 1px 0 #000;
+        }
+        .btn-toastflix.copied {
+            background: #22c55e;
+            color: #000;
+        }
+        .footer {
+            padding: 14px 24px;
+            text-align: center;
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            border-top: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="brand">
+                <span class="brand-icon">🍞</span>
+                <div>
+                    <h1 class="brand-title">ToastFlix Sidecar</h1>
+                    <div class="brand-subtitle">Audio Remux & Sync Microservice</div>
+                </div>
+            </div>
+            <div class="badge-status">Online</div>
+        </div>
+
+        <div class="media-box">
+            <img src="https://i.imgur.com/nGZPk3R.jpeg" alt="ToastFlix Sidecar">
+        </div>
+
+        <div class="content">
+            <div class="info-card">
+                <strong>Microservizio Audio Attivo!</strong><br>
+                Questo server gestisce l'estrazione, la conversione e la sincronizzazione delle tracce audio italiane per i flussi <strong>4K / FHD Remuxed Dual Audio</strong> di ToastFlix.
+                
+                <div class="url-box">
+                    <span id="urlText">Rilevamento indirizzo...</span>
+                </div>
+
+                <div class="url-action-row">
+                    <button type="button" class="btn-toastflix" id="btnCopyInsert" onclick="copyAndInsertToastflix()">
+                        📋 Copia e inserisci in Toastflix
+                    </button>
+                </div>
+            </div>
+
+            <div class="actions">
+                <a href="https://github.com/qwertyuiop8899/toastflix-sidecar" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
+                    📖 Documentazione GitHub
+                </a>
+                <a href="/health" class="btn btn-secondary">
+                    🩺 Health Check
+                </a>
+            </div>
+        </div>
+
+        <div class="footer">
+            ToastFlix Community · Powered by FastAPI & FFmpeg
+        </div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            var urlSpan = document.getElementById('urlText');
+            if (urlSpan) {
+                urlSpan.textContent = window.location.origin;
+            }
+        });
+
+        function copyAndInsertToastflix() {
+            var origin = window.location.origin;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(origin).catch(function() {});
+            } else {
+                var ta = document.createElement('textarea');
+                ta.value = origin;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            }
+            var btn = document.getElementById('btnCopyInsert');
+            if (btn) {
+                btn.textContent = '✓ Copiato negli appunti!';
+                btn.classList.add('copied');
+                setTimeout(function() {
+                    btn.textContent = '📋 Copia e inserisci in Toastflix';
+                    btn.classList.remove('copied');
+                }, 2500);
+            }
+        }
+    </script>
+</body>
+</html>
+"""
+
+
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
+async def index():
+    return HTMLResponse(content=LANDING_HTML)
 
 
 @app.get("/health")
