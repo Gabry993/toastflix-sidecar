@@ -308,16 +308,20 @@ LANDING_HTML = """<!DOCTYPE html>
 
             <div class="info-card" id="connectivityCard">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
-                    <strong>📡 Connettività Provider (Partite.cc)</strong>
-                    <span id="proxyBadge" style="font-size:0.75rem; padding:2px 8px; border-radius:6px; background:#27272a; color:#a1a1aa;">Proxy: verifica...</span>
+                    <strong>📡 Connettività Provider Audio</strong>
+                    <span id="proxyBadge" style="font-size:0.75rem; padding:2px 8px; border-radius:6px; background:#27272a; color:#a1a1aa;">WARP Partite: verifica...</span>
                 </div>
                 <div style="margin-top:8px; font-size:0.85rem; color:#a1a1aa; line-height:1.4;">
-                    Verifica se questo Sidecar riesce a scaricare le tracce audio AAC da Partite.cc senza blocchi di rete/datacenter.
+                    Verifica lo stato delle due sorgenti audio italiane per ToastFlix:
+                    <ul style="margin:6px 0 0 18px; padding:0; color:#d1d1db;">
+                        <li><strong>Fonte 1 (Vixsrc)</strong>: Connessione sempre diretta (non usa mai WARP).</li>
+                        <li><strong>Fonte 2 (Partite.cc)</strong>: Audio AAC in chiaro (richiede WARP su VPS con IP bloccato).</li>
+                    </ul>
                 </div>
-                <div id="testResultBox" style="display:none; margin-top:10px; padding:10px; border-radius:8px; font-size:0.85rem; line-height:1.4;"></div>
-                <div style="margin-top:10px;">
-                    <button type="button" class="btn btn-secondary" id="btnTestPartite" onclick="testPartiteConnectivity()" style="width:100%;">
-                        🔍 Verifica Connettività Partite.cc
+                <div id="testResultBox" style="display:none; margin-top:12px; font-size:0.85rem; line-height:1.4;"></div>
+                <div style="margin-top:12px;">
+                    <button type="button" class="btn btn-secondary" id="btnTestPartite" onclick="testProvidersConnectivity()" style="width:100%;">
+                        🔍 Verifica Connettività (Fonte 1 & Fonte 2)
                     </button>
                 </div>
             </div>
@@ -343,11 +347,14 @@ LANDING_HTML = """<!DOCTYPE html>
             if (urlSpan) {
                 urlSpan.textContent = window.location.origin;
             }
-            fetch('/api/test-partite?quick=1')
+            fetch('/api/test-providers?quick=1')
                 .then(function(r) { return r.json(); })
                 .then(function(d) {
                     var badge = document.getElementById('proxyBadge');
-                    if (badge && d.proxy) badge.textContent = 'Proxy: ' + d.proxy;
+                    if (badge) {
+                        badge.textContent = d.warp_active ? 'WARP Partite: Attivo' : 'WARP Partite: Non attivo (Diretto)';
+                        badge.style.color = d.warp_active ? '#4ade80' : '#a1a1aa';
+                    }
                 })
                 .catch(function() {});
         });
@@ -375,47 +382,65 @@ LANDING_HTML = """<!DOCTYPE html>
             }
         }
 
-        function testPartiteConnectivity() {
+        function testProvidersConnectivity() {
             var btn = document.getElementById('btnTestPartite');
             var resBox = document.getElementById('testResultBox');
             var badge = document.getElementById('proxyBadge');
             btn.disabled = true;
             btn.textContent = '⏳ Test in corso...';
             resBox.style.display = 'none';
-            fetch('/api/test-partite')
+            fetch('/api/test-providers')
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
                     btn.disabled = false;
                     btn.textContent = '🔍 Verifica di nuovo';
                     resBox.style.display = 'block';
-                    if (badge && data.proxy) badge.textContent = 'Proxy: ' + data.proxy;
-                    if (data.status === 'ok') {
-                        resBox.style.background = 'rgba(34, 197, 94, 0.15)';
-                        resBox.style.border = '1px solid #22c55e';
-                        resBox.style.color = '#4ade80';
-                        resBox.innerHTML = '<strong>✅ RAGGIUNGIBILE!</strong> ' + data.message + '<br><small style="color:#a1a1aa;">Modalità: ' + data.proxy + '</small>';
-                    } else if (data.status === 'blocked') {
-                        resBox.style.background = 'rgba(239, 68, 68, 0.15)';
-                        resBox.style.border = '1px solid #ef4444';
-                        resBox.style.color = '#f87171';
-                        resBox.innerHTML = '<strong>⚠️ BLOCCATO (HTTP ' + data.code + ')</strong><br>' + data.message + '<br><small style="color:#d4d4d8;">Modalità: ' + data.proxy + '<br>Se usi Docker/VPS, imposta <code>SIDECAR_AUDIO_PROXY=socks5h://172.17.0.1:1080</code> (WARP).</small>';
-                    } else {
-                        resBox.style.background = 'rgba(234, 179, 8, 0.15)';
-                        resBox.style.border = '1px solid #eab308';
-                        resBox.style.color = '#facc15';
-                        resBox.innerHTML = '<strong>⚠️ ERRORE:</strong> ' + data.message;
+                    if (badge) {
+                        var hasWarp = data.proxy && data.proxy.indexOf('socks') !== -1;
+                        badge.textContent = hasWarp ? 'WARP Partite: Attivo' : 'WARP Partite: Non attivo (Diretto)';
+                        badge.style.color = hasWarp ? '#4ade80' : '#a1a1aa';
                     }
+                    var f1 = data.fonte1 || {};
+                    var f2 = data.fonte2 || {};
+                    var f1Ok = f1.status === 'ok';
+                    var f2Ok = f2.status === 'ok';
+
+                    var html = '<div style="display:flex; flex-direction:column; gap:10px;">';
+
+                    // Fonte 1 (Vixsrc)
+                    html += '<div style="padding:10px 12px; border-radius:8px; background:' + (f1Ok ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)') + '; border:1px solid ' + (f1Ok ? '#22c55e' : '#ef4444') + '; color:' + (f1Ok ? '#4ade80' : '#f87171') + ';">';
+                    html += '<div style="display:flex; justify-content:space-between; align-items:center;">';
+                    html += '<strong>' + (f1Ok ? '✅ ' : '❌ ') + (f1.name || 'Fonte 1 (Vixsrc)') + '</strong>';
+                    html += '<span style="font-size:0.75rem; padding:1px 6px; border-radius:4px; background:#18181b; color:#a1a1aa;">' + (f1.mode || 'Diretto') + '</span>';
+                    html += '</div>';
+                    html += '<div style="margin-top:4px; font-size:0.82rem; color:' + (f1Ok ? '#bbf7d0' : '#fca5a5') + ';">' + (f1.message || '') + '</div>';
+                    html += '</div>';
+
+                    // Fonte 2 (Partite.cc)
+                    html += '<div style="padding:10px 12px; border-radius:8px; background:' + (f2Ok ? 'rgba(34, 197, 94, 0.12)' : 'rgba(239, 68, 68, 0.12)') + '; border:1px solid ' + (f2Ok ? '#22c55e' : '#ef4444') + '; color:' + (f2Ok ? '#4ade80' : '#f87171') + ';">';
+                    html += '<div style="display:flex; justify-content:space-between; align-items:center;">';
+                    html += '<strong>' + (f2Ok ? '✅ ' : '⚠️ ') + (f2.name || 'Fonte 2 (Partite.cc)') + '</strong>';
+                    html += '<span style="font-size:0.75rem; padding:1px 6px; border-radius:4px; background:#18181b; color:#a1a1aa;">' + (f2.proxy || 'Diretto') + '</span>';
+                    html += '</div>';
+                    html += '<div style="margin-top:4px; font-size:0.82rem; color:' + (f2Ok ? '#bbf7d0' : '#fca5a5') + ';">' + (f2.message || '') + '</div>';
+                    if (!f2Ok && f2.suggestion) {
+                        html += '<div style="margin-top:8px; padding:8px 10px; border-radius:6px; background:rgba(0,0,0,0.35); border:1px solid rgba(239,68,68,0.4); font-size:0.80rem; color:#fed7aa; line-height:1.4;">';
+                        html += '💡 <strong>Suggerimento WARP:</strong> ' + f2.suggestion;
+                        html += '</div>';
+                    }
+                    html += '</div>';
+
+                    html += '</div>';
+                    resBox.innerHTML = html;
                 })
                 .catch(function(err) {
                     btn.disabled = false;
                     btn.textContent = '🔍 Riprova test';
                     resBox.style.display = 'block';
-                    resBox.style.background = 'rgba(239, 68, 68, 0.15)';
-                    resBox.style.border = '1px solid #ef4444';
-                    resBox.style.color = '#f87171';
-                    resBox.innerHTML = '<strong>Errore richiesta:</strong> ' + err;
+                    resBox.innerHTML = '<div style="padding:10px; border-radius:8px; background:rgba(239, 68, 68, 0.15); border:1px solid #ef4444; color:#f87171;"><strong>Errore test:</strong> ' + err + '</div>';
                 });
         }
+        var testPartiteConnectivity = testProvidersConnectivity;
     </script>
 </body>
 </html>
@@ -432,11 +457,48 @@ async def health():
     return {"status": "ok", "service": "toast-audio-sidecar", "public_url": PUBLIC_BASE_URL or None}
 
 
+@app.get("/api/test-providers")
 @app.get("/api/test-partite")
-async def test_partite(quick: int = 0):
+async def test_providers(quick: int = 0):
     proxy = AUDIO_PROXY or os.getenv("SIDECAR_AUDIO_PROXY", "").strip()
     if quick:
-        return {"proxy": proxy if proxy else "Diretto (nessun proxy)"}
+        return {
+            "proxy": proxy if proxy else "Diretto (nessun proxy)",
+            "warp_active": bool(proxy)
+        }
+
+    # --- Fonte 1: Vixsrc (SEMPRE DIRETTO, mai attraverso WARP o altri proxy) ---
+    fonte1 = {
+        "name": "Fonte 1 (Vixsrc)",
+        "mode": "Diretto (senza WARP)",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
+            resp_vix = await client.get("https://vixsrc.to/cdn-cgi/trace", headers={"User-Agent": "Mozilla/5.0"})
+            if resp_vix.status_code == 200:
+                fonte1.update({
+                    "status": "ok",
+                    "code": 200,
+                    "message": "Raggiungibile direttamente senza blocchi (200 OK)",
+                })
+            else:
+                fonte1.update({
+                    "status": "warning",
+                    "code": resp_vix.status_code,
+                    "message": f"Risposta anomala HTTP {resp_vix.status_code}",
+                })
+    except Exception as exc:
+        fonte1.update({
+            "status": "error",
+            "code": 0,
+            "message": f"Errore di rete: {exc}",
+        })
+
+    # --- Fonte 2: Partite.cc (Usa WARP se configurato in SIDECAR_AUDIO_PROXY) ---
+    fonte2 = {
+        "name": "Fonte 2 (Partite.cc)",
+        "proxy": proxy if proxy else "Diretto (nessun proxy)",
+    }
     test_url = "https://www.partite.cc/hls/p/1790131663/-wE0-ps4TYldCK06sDKHfA/s2/movie/tt12042730/audio/it/audio_segment_000.ts"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -447,27 +509,42 @@ async def test_partite(quick: int = 0):
         kwargs["proxy"] = proxy
     try:
         async with httpx.AsyncClient(**kwargs) as client:
-            resp = await client.get(test_url, headers=headers)
-            if resp.status_code == 200:
-                return {
+            resp_pcc = await client.get(test_url, headers=headers)
+            if resp_pcc.status_code == 200:
+                fonte2.update({
                     "status": "ok",
                     "code": 200,
-                    "proxy": proxy if proxy else "Diretto (nessun proxy)",
-                    "message": "Partite.cc risponde con 200 OK senza blocchi!",
-                }
-            return {
-                "status": "blocked",
-                "code": resp.status_code,
-                "proxy": proxy if proxy else "Diretto (nessun proxy)",
-                "message": f"Partite.cc ha risposto con HTTP {resp.status_code} (IP bloccato/non autorizzato).",
-            }
+                    "message": "Raggiungibile senza blocchi (200 OK)" + (" tramite WARP/Proxy" if proxy else " direttamente"),
+                })
+            else:
+                fonte2.update({
+                    "status": "blocked",
+                    "code": resp_pcc.status_code,
+                    "message": f"Partite.cc ha risposto con HTTP {resp_pcc.status_code} (IP bloccato/non autorizzato).",
+                    "suggestion": (
+                        "L'IP di questa VPS è filtrato da Partite.cc. Configura Cloudflare WARP solo per Partite.cc "
+                        "impostando SIDECAR_AUDIO_PROXY=socks5h://172.17.0.1:1080 nel compose.yml (vedi guida nel README). "
+                        "Nota: Fonte 1 (Vixsrc) continuerà a funzionare normalmente in connessione diretta."
+                    ),
+                })
     except Exception as exc:
-        return {
+        fonte2.update({
             "status": "error",
             "code": 0,
-            "proxy": proxy if proxy else "Diretto (nessun proxy)",
             "message": str(exc),
-        }
+            "suggestion": (
+                "Impossibile raggiungere Partite.cc. Se usi una VPS con IP datacenter, "
+                "configura Cloudflare WARP solo per Partite.cc impostando SIDECAR_AUDIO_PROXY (vedi README)."
+            ),
+        })
+
+    overall_status = "ok" if (fonte1.get("status") == "ok" and fonte2.get("status") == "ok") else "warning"
+    return {
+        "status": overall_status,
+        "proxy": proxy if proxy else "Diretto (nessun proxy)",
+        "fonte1": fonte1,
+        "fonte2": fonte2,
+    }
 
 
 @app.post("/session")

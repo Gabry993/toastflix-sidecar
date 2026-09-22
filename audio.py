@@ -37,6 +37,19 @@ import httpx
 from security import valid_public_url
 
 
+def is_partite_url(url: str, headers: dict | None = None) -> bool:
+    """Restringe l'uso del proxy/WARP esclusivamente a Fonte 2 (Partite.cc). Fonte 1 (Vixsrc) è sempre diretta."""
+    if not url:
+        return False
+    if "partite.cc" in str(url).lower():
+        return True
+    if headers:
+        for k, v in headers.items():
+            if str(k).lower() in ("referer", "origin") and "partite.cc" in str(v).lower():
+                return True
+    return False
+
+
 class AudioStore:
     def __init__(self, root: str, proxy: str = "", max_bytes: int = 10 * 1024**3):
         self.root = Path(root)
@@ -290,9 +303,11 @@ class AudioStore:
         if not valid_public_url(url):
             raise ValueError("audio URL is not public HTTPS")
         kwargs = {"timeout": 30, "follow_redirects": True}
-        proxy = self.proxy or os.getenv("SIDECAR_AUDIO_PROXY", "").strip()
-        if proxy:
-            kwargs["proxy"] = proxy
+        # WARP proxy viene impiegato SOLO per Fonte 2 (Partite.cc). Fonte 1 (Vixsrc) è SEMPRE diretta.
+        if is_partite_url(url, headers):
+            proxy = self.proxy or os.getenv("SIDECAR_AUDIO_PROXY", "").strip()
+            if proxy:
+                kwargs["proxy"] = proxy
         try:
             async with httpx.AsyncClient(**kwargs) as client:
                 response = await client.get(url, headers=headers)

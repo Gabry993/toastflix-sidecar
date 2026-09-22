@@ -211,23 +211,27 @@ sudo certbot --nginx -d audio.tuodominio.com
 | `SIDECAR_PORT` | `3169` | Porta host esposta dal container |
 | `SIDECAR_PUBLIC_URL` | *(vuoto)* | URL pubblico HTTPS del sidecar (es. `https://audio.tuodominio.com`) |
 | `SIDECAR_CACHE_DIR` | `/app/data` | Cartella di memorizzazione temporanea dei segmenti e database offset |
-| `SIDECAR_AUDIO_PROXY` | *(vuoto)* | Proxy opzionale SOCKS5/HTTP per il download delle tracce audio (es. `socks5h://172.17.0.1:1080` per WARP su VPS). Lasciare vuoto per connessione diretta. |
+| `SIDECAR_AUDIO_PROXY` | *(vuoto)* | Proxy opzionale SOCKS5/HTTP impiegato **esclusivamente per Fonte 2 (Partite.cc)** (es. `socks5h://172.17.0.1:1080` per WARP su VPS). **Fonte 1 (Vixsrc) resta sempre diretta** e non viene mai instradata su WARP. |
 | `OFFSET_API_URL` | *(vuoto)* | URL API di ToastFlix per sincronizzare gli offset acustici con il database centrale |
 | `CORS_ORIGINS` | `*` | Origini consentite per le chiamate CORS |
 
 ---
 
-## 🛡️ Configurazione Cloudflare WARP (per VPS con IP bloccato da Partite.cc)
+## 🛡️ Configurazione Cloudflare WARP (SOLO per Fonte 2 Partite.cc)
 
-La sorgente audio italiana principale per i DUAL è **Partite.cc** (stream AAC in chiaro, alta fedeltà).
-* Su **Render**, sui **PC locali** (Windows/Mac/Linux) e sulla maggior parte delle VPS, Partite.cc è **raggiungibile direttamente** senza alcun proxy.
-* Alcune VPS datacenter specifiche (ad esempio **Oracle Cloud**) possono avere il loro indirizzo IP bloccato da Partite.cc (risposta `HTTP 404` sui segmenti audio).
+Il Sidecar supporta due sorgenti audio italiane:
+1. **Fonte 1 (Vixsrc)**: stream HLS ad altissima compatibilità. **Vixsrc opera SEMPRE in connessione diretta** (non usa mai WARP, poiché Cloudflare/Vixsrc blocca gli IP WARP dei datacenter).
+2. **Fonte 2 (Partite.cc)**: stream AAC in chiaro ad alta fedeltà. Alcune VPS datacenter specifiche (ad esempio **Oracle Cloud**) hanno il loro indirizzo IP bloccato da Partite.cc (`HTTP 404`). In questo caso, WARP risolve completamente il blocco.
 
-### Come verificare se la tua VPS è bloccata:
+> **Importante:** Se configuri `SIDECAR_AUDIO_PROXY`, il Sidecar applicherà il proxy **solo ed esclusivamente per i segmenti di Partite.cc**. Vixsrc e i flussi video continueranno a passare direttamente senza alcun proxy.
+
+### Come verificare se la tua VPS necessita di WARP:
 Apri la dashboard del Sidecar nel browser (es. `http://tuo-ip:3169` oppure `https://sidecar-xxxx.onrender.com`) e premi il pulsante:
-👉 **🔍 Verifica Connettività Partite.cc**
-* Se esce **✅ RAGGIUNGIBILE**, non devi configurare nulla!
-* Se esce **⚠️ BLOCCATO (HTTP 404)**, segui la procedura WARP sottostante.
+👉 **🔍 Verifica Connettività (Fonte 1 & Fonte 2)**
+* **Fonte 1 (Vixsrc)**: deve risultare **✅ Raggiungibile direttamente**.
+* **Fonte 2 (Partite.cc)**:
+  * Se esce **✅ Raggiungibile**, non devi configurare WARP!
+  * Se esce **⚠️ BLOCCATO (HTTP 404)**, segui la procedura WARP sottostante.
 
 ### Installazione WARP con Docker (per VPS):
 Aggiungi il container `warp` nel tuo `compose.yml`:
@@ -248,7 +252,7 @@ services:
       - "3169:3107"
     environment:
       - SIDECAR_PUBLIC_URL=https://audio.tuodominio.com
-      # Indirizzo del container WARP (172.17.0.1 gateway Docker host o alias di rete):
+      # Indirizzo del container WARP (applicato SOLO a Fonte 2 Partite.cc):
       - SIDECAR_AUDIO_PROXY=socks5h://172.17.0.1:1080
     volumes:
       - ./sidecar-data:/app/data

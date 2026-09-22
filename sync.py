@@ -11,7 +11,7 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from audio import AudioStore
+from audio import AudioStore, is_partite_url
 from offsets import OffsetStore
 from security import resolves_publicly, valid_public_url
 
@@ -34,9 +34,11 @@ class SyncEngine:
         if not valid_public_url(url) or not await resolves_publicly(url):
             raise ValueError("media URL is not public HTTPS")
         kwargs = {"timeout": 30, "follow_redirects": False}
-        proxy = self.proxy or os.getenv("SIDECAR_AUDIO_PROXY", "").strip()
-        if proxy:
-            kwargs["proxy"] = proxy
+        # WARP proxy viene impiegato SOLO per Fonte 2 (Partite.cc). Fonte 1 (Vixsrc) e segmenti video sono SEMPRE diretti.
+        if is_partite_url(url, headers):
+            proxy = self.proxy or os.getenv("SIDECAR_AUDIO_PROXY", "").strip()
+            if proxy:
+                kwargs["proxy"] = proxy
         try:
             async with httpx.AsyncClient(**kwargs) as client:
                 response = await client.get(url, headers=headers)
