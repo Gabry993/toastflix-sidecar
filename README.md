@@ -211,8 +211,52 @@ sudo certbot --nginx -d audio.tuodominio.com
 | `SIDECAR_PORT` | `3169` | Porta host esposta dal container |
 | `SIDECAR_PUBLIC_URL` | *(vuoto)* | URL pubblico HTTPS del sidecar (es. `https://audio.tuodominio.com`) |
 | `SIDECAR_CACHE_DIR` | `/app/data` | Cartella di memorizzazione temporanea dei segmenti e database offset |
+| `SIDECAR_AUDIO_PROXY` | *(vuoto)* | Proxy opzionale SOCKS5/HTTP per il download delle tracce audio (es. `socks5h://172.17.0.1:1080` per WARP su VPS). Lasciare vuoto per connessione diretta. |
 | `OFFSET_API_URL` | *(vuoto)* | URL API di ToastFlix per sincronizzare gli offset acustici con il database centrale |
 | `CORS_ORIGINS` | `*` | Origini consentite per le chiamate CORS |
+
+---
+
+## 🛡️ Configurazione Cloudflare WARP (per VPS con IP bloccato da Partite.cc)
+
+La sorgente audio italiana principale per i DUAL è **Partite.cc** (stream AAC in chiaro, alta fedeltà).
+* Su **Render**, sui **PC locali** (Windows/Mac/Linux) e sulla maggior parte delle VPS, Partite.cc è **raggiungibile direttamente** senza alcun proxy.
+* Alcune VPS datacenter specifiche (ad esempio **Oracle Cloud**) possono avere il loro indirizzo IP bloccato da Partite.cc (risposta `HTTP 404` sui segmenti audio).
+
+### Come verificare se la tua VPS è bloccata:
+Apri la dashboard del Sidecar nel browser (es. `http://tuo-ip:3169` oppure `https://sidecar-xxxx.onrender.com`) e premi il pulsante:
+👉 **🔍 Verifica Connettività Partite.cc**
+* Se esce **✅ RAGGIUNGIBILE**, non devi configurare nulla!
+* Se esce **⚠️ BLOCCATO (HTTP 404)**, segui la procedura WARP sottostante.
+
+### Installazione WARP con Docker (per VPS):
+Aggiungi il container `warp` nel tuo `compose.yml`:
+```yaml
+services:
+  warp:
+    image: caomingjun/warp
+    container_name: warp
+    restart: unless-stopped
+    ports:
+      - "1080:1080"
+
+  sidecar:
+    image: ghcr.io/qwertyuiop8899/toastflix-sidecar:latest
+    container_name: toast-audio-sidecar
+    restart: unless-stopped
+    ports:
+      - "3169:3107"
+    environment:
+      - SIDECAR_PUBLIC_URL=https://audio.tuodominio.com
+      # Indirizzo del container WARP (172.17.0.1 gateway Docker host o alias di rete):
+      - SIDECAR_AUDIO_PROXY=socks5h://172.17.0.1:1080
+    volumes:
+      - ./sidecar-data:/app/data
+    depends_on:
+      - warp
+```
+
+> **Nota su Render:** Su Render non è possibile installare WARP. Render usa direttamente il proprio indirizzo IP (che è compatibile). Se per qualsiasi motivo Partite.cc non dovesse rispondere, Toastflix esegue automaticamente il fallback trasparente su **Vixsrc**, garantendo che lo streaming non si interrompa mai.
 
 ---
 

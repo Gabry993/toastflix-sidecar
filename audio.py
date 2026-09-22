@@ -290,17 +290,20 @@ class AudioStore:
         if not valid_public_url(url):
             raise ValueError("audio URL is not public HTTPS")
         kwargs = {"timeout": 30, "follow_redirects": True}
-        proxy = self.proxy
-        if not proxy and "partite.cc" in url:
-            proxy = os.getenv("SIDECAR_AUDIO_PROXY", "socks5h://172.17.0.1:1080")
+        proxy = self.proxy or os.getenv("SIDECAR_AUDIO_PROXY", "").strip()
         if proxy:
             kwargs["proxy"] = proxy
-        async with httpx.AsyncClient(**kwargs) as client:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            if len(response.content) > 20 * 1024 * 1024:
-                raise ValueError("audio segment too large")
-            return response.content
+        try:
+            async with httpx.AsyncClient(**kwargs) as client:
+                response = await client.get(url, headers=headers)
+                response.raise_for_status()
+                if len(response.content) > 20 * 1024 * 1024:
+                    raise ValueError("audio segment too large")
+                return response.content
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"audio segment fetch failed: HTTP {exc.response.status_code}") from exc
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"audio segment fetch failed: {exc}") from exc
 
     @staticmethod
     def _boxes(data: bytes, start=0, end=None):

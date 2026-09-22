@@ -34,9 +34,7 @@ class SyncEngine:
         if not valid_public_url(url) or not await resolves_publicly(url):
             raise ValueError("media URL is not public HTTPS")
         kwargs = {"timeout": 30, "follow_redirects": False}
-        proxy = self.proxy
-        if not proxy and "partite.cc" in url:
-            proxy = os.getenv("SIDECAR_AUDIO_PROXY", "socks5h://172.17.0.1:1080")
+        proxy = self.proxy or os.getenv("SIDECAR_AUDIO_PROXY", "").strip()
         if proxy:
             kwargs["proxy"] = proxy
         try:
@@ -49,7 +47,10 @@ class SyncEngine:
             if not await resolves_publicly(urljoin(url, location)):
                 raise ValueError("media redirect is not public HTTPS")
             return await self._get(urljoin(url, location), headers)
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            raise RuntimeError(f"audio segment fetch failed: HTTP {exc.response.status_code}") from exc
         return response
 
     @staticmethod

@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 from urllib.parse import urlencode
 
+import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -305,6 +306,22 @@ LANDING_HTML = """<!DOCTYPE html>
                 </div>
             </div>
 
+            <div class="info-card" id="connectivityCard">
+                <div style="display:flex; justify-content:space-between; align-items:center;">
+                    <strong>📡 Connettività Provider (Partite.cc)</strong>
+                    <span id="proxyBadge" style="font-size:0.75rem; padding:2px 8px; border-radius:6px; background:#27272a; color:#a1a1aa;">Proxy: verifica...</span>
+                </div>
+                <div style="margin-top:8px; font-size:0.85rem; color:#a1a1aa; line-height:1.4;">
+                    Verifica se questo Sidecar riesce a scaricare le tracce audio AAC da Partite.cc senza blocchi di rete/datacenter.
+                </div>
+                <div id="testResultBox" style="display:none; margin-top:10px; padding:10px; border-radius:8px; font-size:0.85rem; line-height:1.4;"></div>
+                <div style="margin-top:10px;">
+                    <button type="button" class="btn btn-secondary" id="btnTestPartite" onclick="testPartiteConnectivity()" style="width:100%;">
+                        🔍 Verifica Connettività Partite.cc
+                    </button>
+                </div>
+            </div>
+
             <div class="actions">
                 <a href="https://github.com/qwertyuiop8899/toastflix-sidecar" target="_blank" rel="noopener noreferrer" class="btn btn-primary">
                     📖 Documentazione GitHub
@@ -326,6 +343,13 @@ LANDING_HTML = """<!DOCTYPE html>
             if (urlSpan) {
                 urlSpan.textContent = window.location.origin;
             }
+            fetch('/api/test-partite?quick=1')
+                .then(function(r) { return r.json(); })
+                .then(function(d) {
+                    var badge = document.getElementById('proxyBadge');
+                    if (badge && d.proxy) badge.textContent = 'Proxy: ' + d.proxy;
+                })
+                .catch(function() {});
         });
 
         function copyAndInsertToastflix() {
@@ -350,6 +374,48 @@ LANDING_HTML = """<!DOCTYPE html>
                 }, 2500);
             }
         }
+
+        function testPartiteConnectivity() {
+            var btn = document.getElementById('btnTestPartite');
+            var resBox = document.getElementById('testResultBox');
+            var badge = document.getElementById('proxyBadge');
+            btn.disabled = true;
+            btn.textContent = '⏳ Test in corso...';
+            resBox.style.display = 'none';
+            fetch('/api/test-partite')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    btn.disabled = false;
+                    btn.textContent = '🔍 Verifica di nuovo';
+                    resBox.style.display = 'block';
+                    if (badge && data.proxy) badge.textContent = 'Proxy: ' + data.proxy;
+                    if (data.status === 'ok') {
+                        resBox.style.background = 'rgba(34, 197, 94, 0.15)';
+                        resBox.style.border = '1px solid #22c55e';
+                        resBox.style.color = '#4ade80';
+                        resBox.innerHTML = '<strong>✅ RAGGIUNGIBILE!</strong> ' + data.message + '<br><small style="color:#a1a1aa;">Modalità: ' + data.proxy + '</small>';
+                    } else if (data.status === 'blocked') {
+                        resBox.style.background = 'rgba(239, 68, 68, 0.15)';
+                        resBox.style.border = '1px solid #ef4444';
+                        resBox.style.color = '#f87171';
+                        resBox.innerHTML = '<strong>⚠️ BLOCCATO (HTTP ' + data.code + ')</strong><br>' + data.message + '<br><small style="color:#d4d4d8;">Modalità: ' + data.proxy + '<br>Se usi Docker/VPS, imposta <code>SIDECAR_AUDIO_PROXY=socks5h://172.17.0.1:1080</code> (WARP).</small>';
+                    } else {
+                        resBox.style.background = 'rgba(234, 179, 8, 0.15)';
+                        resBox.style.border = '1px solid #eab308';
+                        resBox.style.color = '#facc15';
+                        resBox.innerHTML = '<strong>⚠️ ERRORE:</strong> ' + data.message;
+                    }
+                })
+                .catch(function(err) {
+                    btn.disabled = false;
+                    btn.textContent = '🔍 Riprova test';
+                    resBox.style.display = 'block';
+                    resBox.style.background = 'rgba(239, 68, 68, 0.15)';
+                    resBox.style.border = '1px solid #ef4444';
+                    resBox.style.color = '#f87171';
+                    resBox.innerHTML = '<strong>Errore richiesta:</strong> ' + err;
+                });
+        }
     </script>
 </body>
 </html>
@@ -364,6 +430,44 @@ async def index():
 @app.get("/health")
 async def health():
     return {"status": "ok", "service": "toast-audio-sidecar", "public_url": PUBLIC_BASE_URL or None}
+
+
+@app.get("/api/test-partite")
+async def test_partite(quick: int = 0):
+    proxy = AUDIO_PROXY or os.getenv("SIDECAR_AUDIO_PROXY", "").strip()
+    if quick:
+        return {"proxy": proxy if proxy else "Diretto (nessun proxy)"}
+    test_url = "https://www.partite.cc/hls/p/1790131663/-wE0-ps4TYldCK06sDKHfA/s2/movie/tt12042730/audio/it/audio_segment_000.ts"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+        "Referer": "https://www.partite.cc/",
+    }
+    kwargs = {"timeout": 10, "follow_redirects": True}
+    if proxy:
+        kwargs["proxy"] = proxy
+    try:
+        async with httpx.AsyncClient(**kwargs) as client:
+            resp = await client.get(test_url, headers=headers)
+            if resp.status_code == 200:
+                return {
+                    "status": "ok",
+                    "code": 200,
+                    "proxy": proxy if proxy else "Diretto (nessun proxy)",
+                    "message": "Partite.cc risponde con 200 OK senza blocchi!",
+                }
+            return {
+                "status": "blocked",
+                "code": resp.status_code,
+                "proxy": proxy if proxy else "Diretto (nessun proxy)",
+                "message": f"Partite.cc ha risposto con HTTP {resp.status_code} (IP bloccato/non autorizzato).",
+            }
+    except Exception as exc:
+        return {
+            "status": "error",
+            "code": 0,
+            "proxy": proxy if proxy else "Diretto (nessun proxy)",
+            "message": str(exc),
+        }
 
 
 @app.post("/session")
@@ -552,6 +656,12 @@ async def sync_audio(request: Request):
     try:
         result = await sync_engine.measure(body)
     except (ValueError, FileNotFoundError, RuntimeError) as exc:
+        err_msg = str(exc)
+        if "audio segment fetch failed" in err_msg or "media fetch failed" in err_msg:
+            return JSONResponse(
+                status_code=502,
+                content={"status": "audio_fetch_failed", "error": err_msg}
+            )
         raise HTTPException(status_code=422, detail=str(exc))
     await offsets.report(body, result)
     if result.get("status") != "ok":
