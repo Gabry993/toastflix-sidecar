@@ -293,7 +293,7 @@ LANDING_HTML = """<!DOCTYPE html>
 """
 
 
-@app.get("/", response_class=HTMLResponse)
+@app.api_route("/", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def index():
     return HTMLResponse(content=LANDING_HTML)
 
