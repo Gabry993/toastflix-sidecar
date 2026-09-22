@@ -252,7 +252,7 @@ LANDING_HTML = """<!DOCTYPE html>
         </div>
 
         <div class="media-box">
-            <img src="https://i.imgur.com/uPTmnrC.jpeg" alt="ToastFlix Sidecar">
+            <img src="https://i.imgur.com/nGZPk3R.jpeg" alt="ToastFlix Sidecar">
         </div>
 
         <div class="content">
