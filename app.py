@@ -342,20 +342,13 @@ LANDING_HTML = """<!DOCTYPE html>
             }
             var btn = document.getElementById('btnCopyInsert');
             if (btn) {
-                btn.textContent = '✓ Copiato! Apertura ToastFlix...';
+                btn.textContent = '✓ Copiato negli appunti!';
                 btn.classList.add('copied');
+                setTimeout(function() {
+                    btn.textContent = '📋 Copia e inserisci in Toastflix';
+                    btn.classList.remove('copied');
+                }, 2500);
             }
-            setTimeout(function() {
-                var targetUrl = 'https://noprox.stremio-italia.eu/configure?sidecar=' + encodeURIComponent(origin);
-                window.open(targetUrl, '_blank');
-                if (btn) {
-                    btn.textContent = '✓ Copiato e aperto in Toastflix!';
-                    setTimeout(function() {
-                        btn.textContent = '📋 Copia e inserisci in Toastflix';
-                        btn.classList.remove('copied');
-                    }, 3500);
-                }
-            }, 400);
         }
     </script>
 </body>
