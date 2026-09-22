@@ -211,25 +211,25 @@ sudo certbot --nginx -d audio.tuodominio.com
 | `SIDECAR_PORT` | `3169` | Porta host esposta dal container |
 | `SIDECAR_PUBLIC_URL` | *(vuoto)* | URL pubblico HTTPS del sidecar (es. `https://audio.tuodominio.com`) |
 | `SIDECAR_CACHE_DIR` | `/app/data` | Cartella di memorizzazione temporanea dei segmenti e database offset |
-| `SIDECAR_AUDIO_PROXY` | *(vuoto)* | Proxy opzionale SOCKS5/HTTP impiegato **esclusivamente per Fonte 2 (Partite.cc)** (es. `socks5h://172.17.0.1:1080` per WARP su VPS). **Fonte 1 (Vixsrc) resta sempre diretta** e non viene mai instradata su WARP. |
+| `SIDECAR_AUDIO_PROXY` | *(vuoto)* | Proxy opzionale SOCKS5/HTTP impiegato **esclusivamente per Fonte 2** (es. `socks5h://172.17.0.1:1080` per WARP su VPS). **Fonte 1 (Vixsrc) resta sempre diretta** e non viene mai instradata su WARP. |
 | `OFFSET_API_URL` | *(vuoto)* | URL API di ToastFlix per sincronizzare gli offset acustici con il database centrale |
 | `CORS_ORIGINS` | `*` | Origini consentite per le chiamate CORS |
 
 ---
 
-## 🛡️ Configurazione Cloudflare WARP (SOLO per Fonte 2 Partite.cc)
+## 🛡️ Configurazione Cloudflare WARP (SOLO per Fonte 2)
 
-Il Sidecar supporta due sorgenti audio italiane:
+Il Sidecar supporta due sorgenti audio italiane per ToastFlix:
 1. **Fonte 1 (Vixsrc)**: stream HLS ad altissima compatibilità. **Vixsrc opera SEMPRE in connessione diretta** (non usa mai WARP, poiché Cloudflare/Vixsrc blocca gli IP WARP dei datacenter).
-2. **Fonte 2 (Partite.cc)**: stream AAC in chiaro ad alta fedeltà. Alcune VPS datacenter specifiche (ad esempio **Oracle Cloud**) hanno il loro indirizzo IP bloccato da Partite.cc (`HTTP 404`). In questo caso, WARP risolve completamente il blocco.
+2. **Fonte 2**: stream AAC in chiaro ad alta fedeltà. Alcune VPS datacenter specifiche (ad esempio **Oracle Cloud**) possono avere il loro indirizzo IP bloccato dal provider di Fonte 2 (`HTTP 404`). In questo caso, WARP risolve completamente il problema.
 
-> **Importante:** Se configuri `SIDECAR_AUDIO_PROXY`, il Sidecar applicherà il proxy **solo ed esclusivamente per i segmenti di Partite.cc**. Vixsrc e i flussi video continueranno a passare direttamente senza alcun proxy.
+> **Importante:** Se configuri `SIDECAR_AUDIO_PROXY`, il Sidecar applicherà il proxy **solo ed esclusivamente per i segmenti di Fonte 2**. Fonte 1 (Vixsrc) e i flussi video continueranno a passare direttamente senza alcun proxy.
 
 ### Come verificare se la tua VPS necessita di WARP:
-Apri la dashboard del Sidecar nel browser (es. `http://tuo-ip:3169` oppure `https://sidecar-xxxx.onrender.com`) e premi il pulsante:
+Apri la dashboard web del Sidecar nel browser (es. `http://tuo-ip:3169` oppure `https://sidecar-xxxx.onrender.com`) e premi il pulsante:  
 👉 **🔍 Verifica Connettività (Fonte 1 & Fonte 2)**
 * **Fonte 1 (Vixsrc)**: deve risultare **✅ Raggiungibile direttamente**.
-* **Fonte 2 (Partite.cc)**:
+* **Fonte 2**:
   * Se esce **✅ Raggiungibile**, non devi configurare WARP!
   * Se esce **⚠️ BLOCCATO (HTTP 404)**, segui la procedura WARP sottostante.
 
@@ -252,7 +252,7 @@ services:
       - "3169:3107"
     environment:
       - SIDECAR_PUBLIC_URL=https://audio.tuodominio.com
-      # Indirizzo del container WARP (applicato SOLO a Fonte 2 Partite.cc):
+      # Indirizzo del container WARP (applicato SOLO a Fonte 2):
       - SIDECAR_AUDIO_PROXY=socks5h://172.17.0.1:1080
     volumes:
       - ./sidecar-data:/app/data
@@ -260,7 +260,7 @@ services:
       - warp
 ```
 
-> **Nota su Render:** Su Render non è possibile installare WARP. Render usa direttamente il proprio indirizzo IP (che è compatibile). Se per qualsiasi motivo Partite.cc non dovesse rispondere, Toastflix esegue automaticamente il fallback trasparente su **Vixsrc**, garantendo che lo streaming non si interrompa mai.
+> **Nota su Render:** Su Render non è possibile installare WARP. Render usa direttamente il proprio indirizzo IP (che è compatibile). Se per qualsiasi motivo Fonte 2 non dovesse rispondere, Toastflix esegue automaticamente il fallback trasparente su **Fonte 1 (Vixsrc)**, garantendo che lo streaming non si interrompa mai.
 
 ---
 
