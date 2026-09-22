@@ -228,6 +228,40 @@ LANDING_HTML = """<!DOCTYPE html>
             background: #3f3f46;
             transform: translateY(-1px);
         }
+        .url-action-row {
+            margin-top: 12px;
+            display: flex;
+        }
+        .btn-toastflix {
+            width: 100%;
+            background: #ff9800;
+            color: #000;
+            border: 2px solid #000;
+            box-shadow: 3px 3px 0 #000;
+            padding: 12px 18px;
+            font-size: 0.95rem;
+            font-weight: 900;
+            cursor: pointer;
+            border-radius: 8px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            transition: all 0.15s ease;
+        }
+        .btn-toastflix:hover {
+            background: #ffa834;
+            transform: translate(-1px, -1px);
+            box-shadow: 4px 4px 0 #000;
+        }
+        .btn-toastflix:active {
+            transform: translate(2px, 2px);
+            box-shadow: 1px 1px 0 #000;
+        }
+        .btn-toastflix.copied {
+            background: #22c55e;
+            color: #000;
+        }
         .footer {
             padding: 14px 24px;
             text-align: center;
@@ -263,6 +297,12 @@ LANDING_HTML = """<!DOCTYPE html>
                 <div class="url-box">
                     <span id="urlText">Rilevamento indirizzo...</span>
                 </div>
+
+                <div class="url-action-row">
+                    <button type="button" class="btn-toastflix" id="btnCopyInsert" onclick="copyAndInsertToastflix()">
+                        📋 Copia e inserisci in Toastflix
+                    </button>
+                </div>
             </div>
 
             <div class="actions">
@@ -287,6 +327,36 @@ LANDING_HTML = """<!DOCTYPE html>
                 urlSpan.textContent = window.location.origin;
             }
         });
+
+        function copyAndInsertToastflix() {
+            var origin = window.location.origin;
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(origin).catch(function() {});
+            } else {
+                var ta = document.createElement('textarea');
+                ta.value = origin;
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+            }
+            var btn = document.getElementById('btnCopyInsert');
+            if (btn) {
+                btn.textContent = '✓ Copiato! Apertura ToastFlix...';
+                btn.classList.add('copied');
+            }
+            setTimeout(function() {
+                var targetUrl = 'https://noprox.stremio-italia.eu/configure?sidecar=' + encodeURIComponent(origin);
+                window.open(targetUrl, '_blank');
+                if (btn) {
+                    btn.textContent = '✓ Copiato e aperto in Toastflix!';
+                    setTimeout(function() {
+                        btn.textContent = '📋 Copia e inserisci in Toastflix';
+                        btn.classList.remove('copied');
+                    }, 3500);
+                }
+            }, 400);
+        }
     </script>
 </body>
 </html>
