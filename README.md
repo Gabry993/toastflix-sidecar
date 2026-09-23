@@ -2,7 +2,7 @@
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/qwertyuiop8899/toastflix-sidecar)
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/deploy?template=https://github.com/qwertyuiop8899/toastflix-sidecar)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/toastflix-sidecar)
 
 Microservizio dedicato alla sincronizzazione e fornitura dell'audio italiano per i flussi **4K / FHD Dual Audio** di ToastFlix.
 
